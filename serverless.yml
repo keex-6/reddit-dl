@@ -20,7 +20,7 @@ functions:
     handler: handler.main
     name: reddit-dl-download
     timeout: 30
-    memory: 256
+    memory: 512
     events:
       - http:
           path: download

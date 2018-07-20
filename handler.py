@@ -1,20 +1,38 @@
 import re
 import os
+import string
 import boto3
 import json
 import youtube_dl
+import requests
 from youtube_dl.utils import UnsupportedError
 from boto3.exceptions import S3UploadFailedError
 
-os.environ['PATH'] = os.environ['PATH'] + ':/var/task' # so ffmpeg is in path
+os.environ['PATH'] = os.environ['PATH'] + ':/var/task' # for ffmpeg
 s3 = boto3.client('s3')
+
+def get_media_title(id):
+    """
+    returns title of media in reddit post identified by id
+    title is in a file & S3 friendly format
+    if no title present, returns empty string
+    """
+    try:
+        j = requests.get('https://www.reddit.com/comments/{}.json'.format(id),
+            headers={'User-Agent': 'Mozilla/5.0'}).json()
+        title = j[0]['data']['children'][0]['data']['title']
+        title = title.replace(' ', '-')
+        valid_chars = "-_.()%s%s" % (string.ascii_letters, string.digits)
+        return ''.join(c for c in title if c in valid_chars)
+    except:
+        return ''
 
 def strip_reddit_id(url):
     """
     strips id from reddit url
-    supports either full link or short link:
-    full link -> https://www.reddit.com/r/bjj/comments/84c4kv/guikoji/
-    short link ->https://redd.it/84c4kv (short link)
+    supports either full or short link:
+      - https://www.reddit.com/r/bjj/comments/84c4kv/guikoji/
+      - https://redd.it/84c4kv
     """
     pattern = r'.*(?:comments)?\/(\w{6})(?:\/|$)'
     matchObj = re.match(pattern, url)
@@ -40,7 +58,7 @@ def s3_key_exists(bucket, key):
 
 def lambda_response(code, body):
     return {
-        'statusCode': 200,
+        'statusCode': code,
         'headers': {
             'Access-Control-Allow-Origin': '*', 
             'Access-Control-Allow-Credentials': True
@@ -55,23 +73,22 @@ def main(event, context):
     url = event['queryStringParameters'].get('url', None)
     if url == None:
         return lambda_response(400, {'error': 'url is missing'})
-    print('request received: {}'.format(url))
+    print('request received:', url)
 
     id = strip_reddit_id(url)
     if id == None:
         return lambda_response(400, {'error': 'url is invalid'})
-    print('id stripped: {}'.format(id))
-    
-    key = '{}.mp4'.format(id)
+    print('id stripped:', id)
+
+    key = '{0}_{1}.mp4'.format(get_media_title(id), id)
     if s3_key_exists(bucket, key):
-        print('video already exists in s3')
         link = s3_key_to_link(region, bucket, key)
         return lambda_response(200, {'link': link})
     
-    filename = '/tmp/' + key
+    f = '/tmp/' + key
     try:
         ydl = youtube_dl.YoutubeDL({
-            'outtmpl': filename, 
+            'outtmpl': f, 
             'format': 'bestvideo[filesize<100M,ext=mp4]+bestaudio/best[filesize<100M]/best'}
         )
         with ydl:
@@ -79,20 +96,21 @@ def main(event, context):
     except UnsupportedError:
         return lambda_response(400, {'error': 'url is invalid'})
     except Exception as e:
-        print('error while downloading: {}'.format(e))
+        print('error while downloading:', e)
         return lambda_response(500, {})
 
     try:
         print('uploading to s3...')
-        s3.upload_file(filename, bucket, key, ExtraArgs={'ACL':'public-read'})
+        s3.upload_file(f, bucket, key, ExtraArgs={'ACL':'public-read'})
     except S3UploadFailedError as e:
-        print('upload failed: {}'.format(e))
+        print('upload failed:', e)
         return lambda_response(500, {})
-    print('upload complete')
 
-    return lambda_response(200, {'link': s3_key_to_link(region, bucket, key)})
+    link = s3_key_to_link(region, bucket, key)
+    print('upload complete:', link)
+    return lambda_response(200, {'link': link})
 
 if __name__ == "__main__":
     main({'queryStringParameters': {
-        'url': 'https://www.reddit.com/r/WTF/comments/904nw6/isssssss_that_a_snake/'
+        'url': 'https://www.reddit.com/r/WTF/comments/90q99g/airplane_trying_to_lift_flight_on_a_street/'
     },'body': ''}, '')

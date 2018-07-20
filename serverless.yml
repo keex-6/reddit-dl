@@ -1,0 +1,32 @@
+service: reddit-dl
+
+plugins:
+  - serverless-python-requirements
+
+provider:
+  name: aws
+  runtime: python3.6
+  region: eu-central-1
+  role: arn:aws:iam::221210596522:role/LambdaS3FullAccess
+
+package:
+  exclude:
+    - .git/**
+    - .gitignore
+    - .vscode/**
+
+functions:
+  download:
+    handler: handler.main
+    name: reddit-dl-download
+    timeout: 30
+    memory: 256
+    events:
+      - http:
+          path: download
+          method: post
+          cors: true
+
+custom:
+  pythonRequirements:
+    dockerizePip: true
